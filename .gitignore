@@ -137,3 +137,15 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Project-specific
+.turbo/
+*.db
+*.db-journal
+packages/backend/prisma/migrations/
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*~

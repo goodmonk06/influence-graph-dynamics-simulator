@@ -1,0 +1,84 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model InfluenceNode {
+  id                  String   @id @default(cuid())
+  communityId         String
+  memberId            String
+  baseInfluenceScore  Float    @default(1.0)
+  metaJson            Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Relations
+  outgoingEdges       InfluenceEdge[] @relation("FromNode")
+  incomingEdges       InfluenceEdge[] @relation("ToNode")
+
+  @@unique([communityId, memberId])
+  @@index([communityId])
+  @@map("influence_nodes")
+}
+
+model InfluenceEdge {
+  id           String   @id @default(cuid())
+  communityId  String
+  fromNodeId   String
+  toNodeId     String
+  strength     Float    @default(0.5) // 0.0 to 1.0
+  relationType String   @default("other") // 'friend' | 'mentor' | 'group_peer' | 'other'
+  metaJson     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  fromNode     InfluenceNode @relation("FromNode", fields: [fromNodeId], references: [id], onDelete: Cascade)
+  toNode       InfluenceNode @relation("ToNode", fields: [toNodeId], references: [id], onDelete: Cascade)
+
+  @@unique([fromNodeId, toNodeId])
+  @@index([communityId])
+  @@index([fromNodeId])
+  @@index([toNodeId])
+  @@map("influence_edges")
+}
+
+model PropagationScenario {
+  id                    String   @id @default(cuid())
+  communityId           String
+  name                  String
+  descriptionMarkdown   String?
+  initialSeedNodesJson  Json     // Array of node IDs that start as active
+  parametersJson        Json     // { decayFactor, maxIterations, activationThreshold, etc. }
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relations
+  results               PropagationResult[]
+
+  @@index([communityId])
+  @@index([createdAt])
+  @@map("propagation_scenarios")
+}
+
+model PropagationResult {
+  id             String   @id @default(cuid())
+  scenarioId     String
+  iterationCount Int
+  resultJson     Json     // { iterations: [ { step: 0, activeNodes: [...], ... } ] }
+  createdAt      DateTime @default(now())
+
+  // Relations
+  scenario       PropagationScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+
+  @@index([scenarioId])
+  @@index([createdAt])
+  @@map("propagation_results")
+}
