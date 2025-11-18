@@ -10,21 +10,57 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================================================
+// CORE DOMAIN MODELS
+// ============================================================================
+
+model Community {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  settings    Json     @default("{}") // { quotas, features, preferences }
+  status      String   @default("active") // active | archived | suspended
+  tags        String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  nodes            InfluenceNode[]
+  edges            InfluenceEdge[]
+  scenarios        PropagationScenario[]
+  campaigns        Campaign[]
+  templates        ScenarioTemplate[]
+  batches          SimulationBatch[]
+  analytics        NodeAnalytics[]
+  insights         Insight[]
+
+  @@index([slug])
+  @@index([status])
+  @@map("communities")
+}
+
 model InfluenceNode {
   id                  String   @id @default(cuid())
   communityId         String
   memberId            String
   baseInfluenceScore  Float    @default(1.0)
+  calculatedMetrics   Json?    // { centrality, pageRank, clustering, etc. }
+  status              String   @default("active") // active | inactive | suspended
+  tags                String[] @default([])
   metaJson            Json?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   // Relations
-  outgoingEdges       InfluenceEdge[] @relation("FromNode")
-  incomingEdges       InfluenceEdge[] @relation("ToNode")
+  community           Community         @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  outgoingEdges       InfluenceEdge[]   @relation("FromNode")
+  incomingEdges       InfluenceEdge[]   @relation("ToNode")
+  analytics           NodeAnalytics[]
 
   @@unique([communityId, memberId])
   @@index([communityId])
+  @@index([status])
   @@map("influence_nodes")
 }
 
@@ -35,11 +71,15 @@ model InfluenceEdge {
   toNodeId     String
   strength     Float    @default(0.5) // 0.0 to 1.0
   relationType String   @default("other") // 'friend' | 'mentor' | 'group_peer' | 'other'
+  status       String   @default("active") // active | inactive
+  weight       Float    @default(1.0) // Additional weight multiplier for advanced scenarios
+  tags         String[] @default([])
   metaJson     Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   // Relations
+  community    Community     @relation(fields: [communityId], references: [id], onDelete: Cascade)
   fromNode     InfluenceNode @relation("FromNode", fields: [fromNodeId], references: [id], onDelete: Cascade)
   toNode       InfluenceNode @relation("ToNode", fields: [toNodeId], references: [id], onDelete: Cascade)
 
@@ -47,6 +87,7 @@ model InfluenceEdge {
   @@index([communityId])
   @@index([fromNodeId])
   @@index([toNodeId])
+  @@index([status])
   @@map("influence_edges")
 }
 
@@ -55,30 +96,211 @@ model PropagationScenario {
   communityId           String
   name                  String
   descriptionMarkdown   String?
+  status                String   @default("draft") // draft | active | archived
   initialSeedNodesJson  Json     // Array of node IDs that start as active
   parametersJson        Json     // { decayFactor, maxIterations, activationThreshold, etc. }
+  tags                  String[] @default([])
+  templateId            String?  // Reference to template if created from one
+  campaignId            String?  // Link to real campaign for validation
+  metaJson              Json?    // Custom metadata
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
   // Relations
+  community             Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  template              ScenarioTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  campaign              Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   results               PropagationResult[]
+  batchScenarios        BatchScenario[]
 
   @@index([communityId])
+  @@index([status])
+  @@index([templateId])
+  @@index([campaignId])
   @@index([createdAt])
   @@map("propagation_scenarios")
 }
 
 model PropagationResult {
-  id             String   @id @default(cuid())
-  scenarioId     String
-  iterationCount Int
-  resultJson     Json     // { iterations: [ { step: 0, activeNodes: [...], ... } ] }
-  createdAt      DateTime @default(now())
+  id                String   @id @default(cuid())
+  scenarioId        String
+  iterationCount    Int
+  resultJson        Json     // { iterations: [ { step: 0, activeNodes: [...], ... } ] }
+  summaryMetrics    Json?    // { totalReach, convergenceTime, topActivators, etc. }
+  executionTimeMs   Int?     // How long simulation took
+  createdAt         DateTime @default(now())
 
   // Relations
-  scenario       PropagationScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  scenario          PropagationScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 
   @@index([scenarioId])
   @@index([createdAt])
   @@map("propagation_results")
+}
+// ============================================================================
+// CAMPAIGN TRACKING & VALIDATION
+// ============================================================================
+
+model Campaign {
+  id                String   @id @default(cuid())
+  communityId       String
+  name              String
+  description       String?
+  type              String   // announcement | product_launch | event | content | custom
+  status            String   @default("planned") // planned | active | completed | cancelled
+  startDate         DateTime?
+  endDate           DateTime?
+  goalJson          Json?    // { targetReach, targetEngagement, budget, etc. }
+  actualMetricsJson Json?    // { actualReach, actualEngagement, conversionRate, etc. }
+  tags              String[] @default([])
+  metaJson          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  community         Community             @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  scenarios         PropagationScenario[]
+  insights          Insight[]
+
+  @@index([communityId])
+  @@index([status])
+  @@index([type])
+  @@map("campaigns")
+}
+
+// ============================================================================
+// SCENARIO TEMPLATES & LIBRARY
+// ============================================================================
+
+model ScenarioTemplate {
+  id                    String   @id @default(cuid())
+  communityId           String?  // null = global template
+  name                  String
+  description           String?
+  category              String   // product_launch | event | announcement | grassroots | coordinated
+  isPublic              Boolean  @default(false)
+  usageCount            Int      @default(0)
+  parametersJson        Json     // Default parameters
+  seedSelectionStrategy String   // manual | top_influencers | random | cluster_based
+  tags                  String[] @default([])
+  metaJson              Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relations
+  community             Community?            @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  scenarios             PropagationScenario[]
+
+  @@index([communityId])
+  @@index([category])
+  @@index([isPublic])
+  @@map("scenario_templates")
+}
+
+// ============================================================================
+// BATCH EXECUTION & COMPARISON
+// ============================================================================
+
+model SimulationBatch {
+  id                String   @id @default(cuid())
+  communityId       String
+  name              String
+  description       String?
+  batchType         String   // parameter_sweep | scenario_comparison | monte_carlo | custom
+  status            String   @default("pending") // pending | running | completed | failed
+  configJson        Json     // { sweepParams, iterations, etc. }
+  resultsJson       Json?    // Aggregated results
+  executionTimeMs   Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  completedAt       DateTime?
+
+  // Relations
+  community         Community       @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  batchScenarios    BatchScenario[]
+  insights          Insight[]
+
+  @@index([communityId])
+  @@index([status])
+  @@index([batchType])
+  @@map("simulation_batches")
+}
+
+model BatchScenario {
+  id             String   @id @default(cuid())
+  batchId        String
+  scenarioId     String
+  runOrder       Int
+  status         String   @default("pending") // pending | running | completed | failed
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+  completedAt    DateTime?
+
+  // Relations
+  batch          SimulationBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  scenario       PropagationScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, scenarioId])
+  @@index([batchId])
+  @@index([scenarioId])
+  @@index([status])
+  @@map("batch_scenarios")
+}
+
+// ============================================================================
+// ANALYTICS & INSIGHTS
+// ============================================================================
+
+model NodeAnalytics {
+  id                  String   @id @default(cuid())
+  communityId         String
+  nodeId              String
+  date                DateTime @default(now())
+  activationCount     Int      @default(0)  // How many times activated in simulations
+  avgIterationActivated Float? // Average iteration when activated
+  reachScore          Float?   // How many others this node can reach on average
+  centralityScore     Float?   // Network centrality measure
+  metricsJson         Json?    // Additional computed metrics
+  createdAt           DateTime @default(now())
+
+  // Relations
+  community           Community     @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  node                InfluenceNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, date])
+  @@index([communityId])
+  @@index([nodeId])
+  @@index([date])
+  @@map("node_analytics")
+}
+
+model Insight {
+  id                String   @id @default(cuid())
+  communityId       String
+  type              String   // bottleneck | influencer | cluster | trend | anomaly | recommendation
+  severity          String   @default("info") // info | warning | critical
+  title             String
+  description       String
+  dataJson          Json?    // Supporting data for the insight
+  relatedEntityType String?  // node | edge | scenario | campaign | batch
+  relatedEntityId   String?
+  campaignId        String?
+  batchId           String?
+  isActionable      Boolean  @default(false)
+  actionTaken       Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  dismissedAt       DateTime?
+
+  // Relations
+  community         Community        @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  campaign          Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  batch             SimulationBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([communityId])
+  @@index([type])
+  @@index([severity])
+  @@index([campaignId])
+  @@index([batchId])
+  @@index([createdAt])
+  @@map("insights")
 }

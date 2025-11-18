@@ -17,6 +17,64 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - influence-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: influence-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - influence-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    container_name: influence-backend
+    environment:
+      DATABASE_URL: postgresql://influence:influence_dev_password@postgres:5432/influence_graph?schema=public
+      REDIS_URL: redis://redis:6379
+      PORT: 3001
+      HOST: 0.0.0.0
+      NODE_ENV: production
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - influence-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile
+    container_name: influence-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+    depends_on:
+      - backend
+    networks:
+      - influence-network
 
 volumes:
   postgres_data:
+  redis_data:
+
+networks:
+  influence-network:
+    driver: bridge
